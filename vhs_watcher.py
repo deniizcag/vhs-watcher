@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import re
+from datetime import date
 from pathlib import Path
 
 import requests
@@ -21,6 +22,9 @@ STATE_FILE = Path("vhs_state.json")
 SEARCH_TEXT = "Einbürgerung Sprachtest"
 # Serbest metin araması hazırlık kurslarını da getirebilir; sadece sınavın kendisini takip et.
 KEYWORDS = ["Sprachtest zur Einbürgerung"]
+
+# Satırda bunlardan biri geçiyorsa kayıt yapılamaz (dolu veya kayıt kapalı).
+UNAVAILABLE = ("belegt", "nicht buchbar")
 
 # Listedeki ">" (sonraki sayfa) butonu
 NEXT_BUTTON = 'input[name="ctl00$Content$ILDataGrid1$ctl01$ctl04"]'
@@ -61,7 +65,7 @@ async def scrape_current_page(page: Page) -> dict:
         courses[cid] = {
             "title": title,
             "row": row_text,
-            "full": "belegt" in row_text.lower(),
+            "full": any(s in row_text.lower() for s in UNAVAILABLE),
             "url": BASE + href.split("BusinessPages/")[-1],
         }
     return courses
@@ -106,6 +110,15 @@ def matches(c: dict) -> bool:
     return not KEYWORDS or any(k.lower() in c["title"].lower() for k in KEYWORDS)
 
 
+def is_past(c: dict) -> bool:
+    """Satırdaki ilk dd.mm.yyyy tarihi bugünden önceyse True."""
+    m = re.search(r"(\d{2})\.(\d{2})\.(\d{4})", c["row"])
+    if not m:
+        return False
+    d, mo, y = map(int, m.groups())
+    return date(y, mo, d) < date.today()
+
+
 def notify(msg: str):
     print(msg)
     if not (TG_TOKEN and TG_CHAT):
@@ -128,7 +141,7 @@ def notify(msg: str):
 def main():
     old = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
     scraped = asyncio.run(scrape_all())
-    new = {k: v for k, v in scraped.items() if matches(v)}
+    new = {k: v for k, v in scraped.items() if matches(v) and not is_past(v)}
     print(f"Toplam {len(scraped)} sonuç, {len(new)} tanesi Einbürgerung sınavı.")
 
     alerts = []
